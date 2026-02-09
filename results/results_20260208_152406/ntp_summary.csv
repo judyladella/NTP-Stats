@@ -1,0 +1,2 @@
+target,loss_pct,offset_ms_mean,offset_ms_jitter,delay_ms_mean,delay_ms_jitter,ok,samples
+localhost,100.0,,,,,0,10

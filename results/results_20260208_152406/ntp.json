@@ -1,0 +1,16 @@
+[
+  {
+    "target": "localhost",
+    "timestamp": "2026-02-08T23:24:16.559045Z",
+    "samples": 10,
+    "ok": 0,
+    "timeouts": 10,
+    "loss_pct": 100.0,
+    "offset_ms_mean": null,
+    "offset_ms_jitter": null,
+    "delay_ms_mean": null,
+    "delay_ms_jitter": null,
+    "raw_offsets_ms": [],
+    "raw_delays_ms": []
+  }
+]
