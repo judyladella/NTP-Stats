@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  time-server:
+    build: .
+    container_name: time-server
+    command: python server.py
+    networks:
+      - ntp-net
+
+  time-monitor:
+    build: .
+    # No container_name here because we want multiple replicas
+    environment:
+      - TARGET_IP=time-server
+    volumes:
+      - .:/app  # This syncs the .db file back to your Mac folder
+    command: python monitor.py
+    depends_on:
+      - time-server
+    networks:
+      - ntp-net
+    deploy:
+      replicas: 1  # We will change this to 5 or 10 for scaling
+
+networks:
+  ntp-net:
+    driver: bridge
