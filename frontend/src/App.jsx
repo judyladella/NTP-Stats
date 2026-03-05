@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:8001";
+const DASHBOARD_URL = `${API_BASE}/api/ntp/dashboard?windowSec=60&historySec=300`;
 
 // ─────────────────────────────────────────────
 // DUMMY DATA
@@ -110,8 +112,92 @@ function OffsetChart({ history }) {
 // PAGE: DASHBOARD
 // ─────────────────────────────────────────────
 function DashboardPage() {
-  const [nodes] = useState(DUMMY_NTP);
+  const [nodes, setNodes] = useState(DUMMY_NTP);
+  const [offsetHistory, setOffsetHistory] = useState(OFFSET_HISTORY);
+  const [systemStatus, setSystemStatus] = useState([
+    { label: "PTP Grandmaster", val: "Online"  },
+    { label: "Chrony",          val: "Running" },
+    { label: "GNSS MAX-M10S",    val: "Locked"  },
+    { label: "USB-ETH Dongle",   val: "Active"  },
+    { label: "PPS Signal",       val: "1 Hz"    },
+    { label: "Collector",        val: "Polling" },
+  ]);
+
   const [selected, setSelected] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      try {
+        setErr("");
+        const res = await fetch(DASHBOARD_URL);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        // 1) nodeMetrics[] (backend) -> nodes[] (frontend expects)
+        const mappedNodes = (data.nodeMetrics || []).map((n) => ({
+          target: n.target,
+          timestamp: new Date(data.metadata?.updatedAt || Date.now()).toISOString(),
+          samples: n.total ?? 0,
+          ok: n.ok ?? 0,
+          timeouts: (n.total ?? 0) - (n.ok ?? 0),
+          loss_pct: n.lossPct ?? 100.0,
+          offset_ms_mean: n.offsetMs ?? null,
+          offset_ms_jitter: n.jitterMs ?? null,   // using jitterMs as shown in table
+          delay_ms_mean: n.delayMs ?? null,
+          delay_ms_jitter: null,                  // optional, you can add later
+        }));
+
+        // 2) offsetHistory.series[] -> OFFSET_HISTORY format your chart expects:
+        //    [{ t:"23:20", "node-01.lan": 0.38, ... }, ...]
+        const series = data.offsetHistory?.series || [];
+        const nodeNames = series.map(s => s.node);
+
+        // Collect all timestamps that appear across nodes
+        const tsSet = new Set();
+        for (const s of series) {
+          for (const p of (s.points || [])) tsSet.add(p.t);
+        }
+        const timestamps = Array.from(tsSet).sort((a, b) => a - b);
+
+        const mappedHistory = timestamps.map((ts) => {
+          const row = {
+            t: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          };
+          for (const n of nodeNames) row[n] = null;
+
+          for (const s of series) {
+            const pt = (s.points || []).find(x => x.t === ts);
+            if (pt && pt.y !== undefined && pt.y !== null) row[s.node] = pt.y;
+          }
+          return row;
+        }).slice(-20); // keep last N points so the chart stays readable
+
+        // 3) systemStatus[] -> the right panel list
+        const mappedStatus = (data.systemStatus || []).map((x) => ({
+          label: x.name,
+          val: x.state
+        }));
+
+        if (!alive) return;
+        setNodes(mappedNodes);
+        if (mappedHistory.length) setOffsetHistory(mappedHistory);
+        if (mappedStatus.length) setSystemStatus(mappedStatus);
+        setLoading(false);
+      } catch (e) {
+        if (!alive) return;
+        setErr(e.message || "Failed to load dashboard");
+        setLoading(false);
+      }
+    }
+
+    load();
+    const id = setInterval(load, 2000); // poll every 2s (tune as you like)
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   const counts = {
     total:       nodes.length,
@@ -141,9 +227,9 @@ function DashboardPage() {
         {/* Chart */}
         <Card style={{ padding: "20px 22px" }}>
           <SectionTitle>Clock Offset History (ms)</SectionTitle>
-          <OffsetChart history={OFFSET_HISTORY} />
+          <OffsetChart history={offsetHistory} />
           <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
-            {Object.keys(OFFSET_HISTORY[0]).filter(k => k !== "t").map((n, i) => (
+            {Object.keys(offsetHistory[0] || { t: "" }).filter(k => k !== "t").map((n, i) => (
               <div key={n} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#6b7280" }}>
                 <div style={{ width: 12, height: 2, background: CHART_COLORS[i], borderRadius: 1 }} />{n}
               </div>
@@ -153,18 +239,24 @@ function DashboardPage() {
 
         {/* System status */}
         <Card style={{ padding: "20px 22px" }}>
-          <SectionTitle>System Status</SectionTitle>
-          {[
-            { label: "PTP Grandmaster", val: "Online"  },
-            { label: "Chrony",          val: "Running" },
-            { label: "GNSS MAX-M10S",   val: "Locked"  },
-            { label: "USB-ETH Dongle",  val: "Active"  },
-            { label: "PPS Signal",      val: "1 Hz"    },
-            { label: "Collector",       val: "Polling" },
-          ].map(item => (
-            <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #f3f4f6" }}>
-              <span style={{ fontSize: 12, color: "#374151" }}>{item.label}</span>
-              <span style={{ fontSize: 11, color: "#15803d", fontWeight: 500 }}>{item.val}</span>
+          {systemStatus.map((item) => (
+            <div
+              key={item.label}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "9px 0",
+                borderBottom: "1px solid #f3f4f6",
+              }}
+            >
+              <span style={{ fontSize: 12, color: "#374151" }}>
+                {item.label}
+              </span>
+
+              <span style={{ fontSize: 11, color: "#15803d", fontWeight: 500 }}>
+                {item.val}
+              </span>
             </div>
           ))}
         </Card>

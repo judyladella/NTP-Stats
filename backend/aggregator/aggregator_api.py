@@ -3,10 +3,20 @@ import time
 import statistics
 from typing import Dict, Any, List
 
-import requests
+import httpx
+import asyncio
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# enable CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # allow all during development
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Comma-separated list of collector endpoints (each should be .../metrics)
 # Example:
@@ -19,8 +29,6 @@ SYNC_OFFSET_MS = float(os.getenv("SYNC_OFFSET_MS", "1.0"))     # abs(offset) <= 
 SYNC_JITTER_MS = float(os.getenv("SYNC_JITTER_MS", "0.5"))     # jitter <= 0.5ms is good
 SYNC_DELAY_MS  = float(os.getenv("SYNC_DELAY_MS", "5.0"))      # delay <= 5ms is good
 SYNC_LOSS_PCT  = float(os.getenv("SYNC_LOSS_PCT", "5.0"))      # loss <= 5% is good
-
-app = FastAPI()
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -81,29 +89,31 @@ def compute_node_aggregates(points: List[Dict[str, Any]], window_start_ms: int) 
         "meanDelay": mean_delay
     }
 
-def poll_collectors() -> Dict[str, Dict[str, Any]]:
-    """
-    Returns: devices[node_name] = {"metrics": [...]}
-    """
-    devices: Dict[str, Dict[str, Any]] = {}
+async def _fetch_one(client: httpx.AsyncClient, url: str):
+    try:
+        r = await client.get(url, timeout=POLL_TIMEOUT_SEC)
+        r.raise_for_status()
+        return url, r.json(), None
+    except Exception as e:
+        return url, None, str(e)
 
-    for url in DEVICE_ENDPOINTS:
-        try:
-            r = requests.get(url, timeout=POLL_TIMEOUT_SEC)
-            payload = r.json()
-            devs = payload.get("devices", {})
-            for node, data in devs.items():
-                # merge: last write wins if duplicates
-                devices[node] = data
-        except Exception:
-            # If a collector is down, we can't know its node name unless you supply a registry.
-            # (Frontend will show fewer totalNodes in that case; see note below.)
+async def poll_collectors_async():
+    devices = {}
+
+    async with httpx.AsyncClient() as client:
+        tasks = [_fetch_one(client, url) for url in DEVICE_ENDPOINTS]
+        results = await asyncio.gather(*tasks)
+
+    for url, payload, err in results:
+        if not payload:
             continue
+        for node, data in (payload.get("devices", {}) or {}).items():
+            devices[node] = data
 
     return devices
 
 @app.get("/api/ntp/dashboard")
-def ntp_dashboard(
+async def ntp_dashboard(
     windowSec: int = Query(60, ge=5, le=3600),
     historySec: int = Query(300, ge=10, le=3600),
     sampleTarget: int = Query(10, ge=1, le=500)
@@ -117,7 +127,7 @@ def ntp_dashboard(
     window_start = now - windowSec * 1000
     history_start = now - historySec * 1000
 
-    devices = poll_collectors()
+    devices = await poll_collectors_async()
 
     # Build offset history series + node metrics table
     offset_series = []
