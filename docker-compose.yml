@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  collector1:
+    build: ./collector
+    environment:
+      - NODE_ID=node-01.lan
+      - TARGET_HOST=pool.ntp.org
+      - PORT=8000
+    networks: [ntp-net]
+
+  collector2:
+    build: ./collector
+    environment:
+      - NODE_ID=node-02.lan
+      - TARGET_HOST=pool.ntp.org
+      - PORT=8000
+    networks: [ntp-net]
+
+  aggregator:
+    build: ./aggregator
+    ports:
+      - "8001:8001"
+    environment:
+      - DEVICE_ENDPOINTS=http://collector1:8000/metrics,http://collector2:8000/metrics
+      - POLL_TIMEOUT_SEC=1.5
+      - SYNC_OFFSET_MS=1.0
+      - SYNC_JITTER_MS=0.5
+      - SYNC_DELAY_MS=5.0
+      - SYNC_LOSS_PCT=5.0
+    depends_on:
+      - collector1
+      - collector2
+    networks: [ntp-net]
+
+networks:
+  ntp-net:
+    driver: bridge
