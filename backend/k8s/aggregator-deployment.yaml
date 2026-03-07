@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntp-aggregator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ntp-aggregator
+  template:
+    metadata:
+      labels:
+        app: ntp-aggregator
+    spec:
+      containers:
+        - name: aggregator
+          image: jladella/ntp-aggregator:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          env:
+            - name: DEVICE_ENDPOINTS
+              value: "http://ntp-collector-0.collector-headless:8000/metrics,http://ntp-collector-1.collector-headless:8000/metrics,http://ntp-collector-2.collector-headless:8000/metrics"
+            - name: POLL_TIMEOUT_SEC
+              value: "1.5"
+            - name: SYNC_OFFSET_MS
+              value: "1.0"
+            - name: SYNC_JITTER_MS
+              value: "0.5"
+            - name: SYNC_DELAY_MS
+              value: "5.0"
+            - name: SYNC_LOSS_PCT
+              value: "5.0"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"

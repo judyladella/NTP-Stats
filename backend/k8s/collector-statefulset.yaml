@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ntp-collector
+spec:
+  serviceName: collector-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ntp-collector
+  template:
+    metadata:
+      labels:
+        app: ntp-collector
+    spec:
+      containers:
+        - name: collector
+          image: jladella/ntp-collector:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TARGET_HOST
+              value: pool.ntp.org
+            - name: PORT
+              value: "8000"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              memory: "256Mi"
