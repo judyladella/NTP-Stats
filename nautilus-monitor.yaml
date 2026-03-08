@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: time-server
+  namespace: cmpm118
+spec:
+  selector:
+    app: ntp-server
+  ports:
+    - protocol: UDP
+      port: 12345
+      targetPort: 12345
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntp-server
+  namespace: cmpm118
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ntp-server
+  template:
+    metadata:
+      labels:
+        app: ntp-server
+    spec:
+      containers:
+      - name: server
+        image: paulleeisme06/ntp-monitor:v5
+        command: ["python3", "server.py"]
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: time-monitor-west
+  namespace: cmpm118
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ntp-research
+      region: west
+  template:
+    metadata:
+      labels:
+        app: ntp-research
+        region: west
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: topology.kubernetes.io/region
+                operator: In
+                values: ["us-west"]
+      containers:
+      - name: monitor
+        image: paulleeisme06/ntp-monitor:v5
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        env:
+        - name: TARGET_IP
+          value: "time-server"
+        - name: TARGETS
+          value: "time.nist.gov,pool.ntp.org"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: time-monitor-east
+  namespace: cmpm118
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ntp-research
+      region: east
+  template:
+    metadata:
+      labels:
+        app: ntp-research
+        region: east
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: topology.kubernetes.io/region
+                operator: In
+                values: ["us-east"]
+      containers:
+      - name: monitor
+        image: paulleeisme06/ntp-monitor:v5
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        env:
+        - name: TARGET_IP
+          value: "time-server"
+        - name: TARGETS
+          value: "time.nist.gov,pool.ntp.org"
