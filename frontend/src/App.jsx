@@ -3,6 +3,17 @@ const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:8001";
 const DASHBOARD_URL = `${API_BASE}/api/ntp/dashboard?windowSec=60&historySec=300`;
 
 // ─────────────────────────────────────────────
+// NODE LOCATION MAP
+// ─────────────────────────────────────────────
+const NODE_LOCATIONS = {
+  "ntp-collector-0": "Georgia Tech, Atlanta GA",
+  "ntp-collector-1": "San Diego State University, CA",
+  "ntp-collector-2": "SDSC, San Diego CA",
+  "time-monitor-east": "Spelman College, Atlanta GA",
+  "time-monitor-west": "San Diego State University, CA",
+};
+
+// ─────────────────────────────────────────────
 // DUMMY DATA
 // ─────────────────────────────────────────────
 const DUMMY_NTP = [
@@ -32,14 +43,14 @@ const DUMMY_RESERVATIONS = [
   { id: 3, email: "carol@lab.edu", cluster: "Cluster Gamma", start: "2026-03-05T08:00", end: "2026-03-05T10:00", status: "Upcoming" },
 ];
 
-const CHART_COLORS = ["#2563eb", "#16a34a", "#ea580c", "#9333ea"];
+const CHART_COLORS = ["#2563eb", "#16a34a", "#ea580c", "#9333ea", "#e11d48"];
 
 // ─────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────
 function statusOf(node) {
   if (node.loss_pct === 100) return "Unreachable";
-  if (node.loss_pct > 20 || Math.abs(node.offset_ms_mean ?? 0) > 1.5) return "Degraded";
+  if (node.loss_pct > 20 || Math.abs(node.offset_ms_mean ?? 0) > 15) return "Degraded";
   return "Synced";
 }
 function fmt(v, unit = "") {
@@ -75,36 +86,139 @@ function SectionTitle({ children }) {
 }
 
 // ─────────────────────────────────────────────
-// OFFSET CHART
+// OFFSET CHART — supports selectable metric
 // ─────────────────────────────────────────────
-function OffsetChart({ history }) {
-  const nodes = Object.keys(history[0]).filter(k => k !== "t");
-  const w = 500, h = 120, pad = { l: 40, r: 16, t: 12, b: 28 };
+function MetricChart({ history }) {
+  // history is now { nodeName: [{t, y}, ...], ... }
+  const nodeNames = Object.keys(history);
+  if (nodeNames.length === 0) return (
+    <div style={{ color: "#9ca3af", fontSize: 12, padding: 20 }}>Waiting for data...</div>
+  );
+
+  const w = 600, h = 140, pad = { l: 44, r: 16, t: 12, b: 28 };
   const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
-  const allVals = history.flatMap(row => nodes.map(n => row[n]));
-  const minV = Math.min(...allVals), maxV = Math.max(...allVals), range = maxV - minV || 1;
-  const xOf = i => pad.l + (i / (history.length - 1)) * iw;
+
+  const allVals = nodeNames.flatMap(n => history[n].map(p => p.y));
+  if (allVals.length === 0) return null;
+
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const range = maxV - minV || 1;
   const yOf = v => pad.t + ih - ((v - minV) / range) * ih;
+
+  // Each node has its own x scale based on its own point count
+  const xOf = (i, total) => pad.l + (i / Math.max(total - 1, 1)) * iw;
+
+  // X axis labels: use the node with most points
+  const longestNode = nodeNames.reduce((a, b) => history[a].length >= history[b].length ? a : b);
+  const xLabels = history[longestNode];
+
   return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{ overflow: "visible" }}>
-      {[0, 0.5, 1].map(f => {
-        const y = pad.t + ih * (1 - f);
-        return <g key={f}>
-          <line x1={pad.l} x2={w - pad.r} y1={y} y2={y} stroke="#e5e7eb" strokeWidth="1" />
-          <text x={pad.l - 6} y={y + 4} textAnchor="end" fill="#9ca3af" fontSize="10" fontFamily="'DM Mono',monospace">{(minV + range * f).toFixed(2)}</text>
-        </g>;
-      })}
-      {history.map((row, i) => (
-        <text key={i} x={xOf(i)} y={h - 6} textAnchor="middle" fill="#9ca3af" fontSize="10" fontFamily="'DM Mono',monospace">{row.t}</text>
+    <div>
+      <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{ overflow: "visible" }}>
+        {[0, 0.5, 1].map(f => {
+          const y = pad.t + ih * (1 - f);
+          return <g key={f}>
+            <line x1={pad.l} x2={w - pad.r} y1={y} y2={y} stroke="#e5e7eb" strokeWidth="1" />
+            <text x={pad.l - 6} y={y + 4} textAnchor="end" fill="#9ca3af" fontSize="10" fontFamily="'DM Mono',monospace">
+              {(minV + range * f).toFixed(1)}
+            </text>
+          </g>;
+        })}
+        {xLabels.map((p, i) => (
+          <text key={i} x={xOf(i, xLabels.length)} y={h - 6} textAnchor="middle" fill="#9ca3af" fontSize="9" fontFamily="'DM Mono',monospace">
+            {p.t}
+          </text>
+        ))}
+        {nodeNames.map((n, ni) => {
+          const pts = history[n];
+          if (!pts || pts.length === 0) return null;
+          const polyPts = pts.map((p, i) => `${xOf(i, pts.length)},${yOf(p.y)}`).join(" ");
+          return <g key={n}>
+            <polyline points={polyPts} fill="none" stroke={CHART_COLORS[ni % CHART_COLORS.length]} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            {pts.map((p, i) => (
+              <circle key={i} cx={xOf(i, pts.length)} cy={yOf(p.y)} r="3" fill="white" stroke={CHART_COLORS[ni % CHART_COLORS.length]} strokeWidth="1.5" />
+            ))}
+          </g>;
+        })}
+      </svg>
+      <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+        {nodeNames.map((n, i) => (
+          <div key={n} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#6b7280" }}>
+            <div style={{ width: 12, height: 2, background: CHART_COLORS[i % CHART_COLORS.length], borderRadius: 1 }} />{n}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// GEOGRAPHIC COMPARISON
+// ─────────────────────────────────────────────
+function GeoComparisonSection({ eastNode, westNode }) {
+  if (!eastNode || !westNode) return null;
+
+  const diff = ((eastNode.delayMs ?? 0) - (westNode.delayMs ?? 0)).toFixed(1);
+  const eastFaster = parseFloat(diff) < 0;
+
+  const metrics = [
+    { label: "Avg Delay",  east: eastNode.delayMs,               west: westNode.delayMs,               unit: "ms", max: Math.max(eastNode.delayMs ?? 0, westNode.delayMs ?? 0, 1) },
+    { label: "Jitter",     east: eastNode.jitterMs,              west: westNode.jitterMs,              unit: "ms", max: Math.max(eastNode.jitterMs ?? 0, westNode.jitterMs ?? 0, 1) },
+    { label: "Offset",     east: Math.abs(eastNode.offsetMs ?? 0), west: Math.abs(westNode.offsetMs ?? 0), unit: "ms", max: Math.max(Math.abs(eastNode.offsetMs ?? 0), Math.abs(westNode.offsetMs ?? 0), 1) },
+  ];
+
+  return (
+    <Card style={{ padding: "20px 24px", marginBottom: 20 }}>
+      <SectionTitle>Geographic Latency Comparison — East vs West</SectionTitle>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
+        {[
+          { label: "East Coast Delay", value: `${(eastNode.delayMs ?? 0).toFixed(1)} ms`, color: "#2563eb" },
+          { label: "West Coast Delay", value: `${(westNode.delayMs ?? 0).toFixed(1)} ms`, color: "#16a34a" },
+          { label: "East−West Diff",   value: `${Math.abs(parseFloat(diff)).toFixed(1)} ms ${eastFaster ? "faster East" : "faster West"}`, color: eastFaster ? "#2563eb" : "#16a34a" },
+        ].map(c => (
+          <div key={c.label} style={{ background: "#f9fafb", borderRadius: 8, padding: "14px 16px", border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>{c.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: c.color, fontFamily: "'DM Mono', monospace" }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {metrics.map(m => (
+        <div key={m.label} style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: "#374151", marginBottom: 8 }}>{m.label}</div>
+          {[{ label: "East", value: m.east, color: "#2563eb" }, { label: "West", value: m.west, color: "#16a34a" }].map(side => (
+            <div key={side.label} style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: side.color, flexShrink: 0 }} />
+                <span style={{ fontSize: 11, color: "#6b7280", width: 40 }}>{side.label}</span>
+                <div style={{ flex: 1, background: "#f3f4f6", borderRadius: 4, height: 10, overflow: "hidden" }}>
+                  <div style={{ width: `${((side.value ?? 0) / m.max) * 100}%`, background: side.color, height: "100%", borderRadius: 4, transition: "width 0.5s ease" }} />
+                </div>
+                <span style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", color: "#374151", width: 65, textAlign: "right" }}>
+                  {side.value != null ? `${side.value.toFixed(1)} ${m.unit}` : "—"}
+                </span>
+              </div>
+            </div>
+          ))}
+          <div style={{ height: 1, background: "#f3f4f6", marginTop: 10 }} />
+        </div>
       ))}
-      {nodes.map((n, ni) => {
-        const pts = history.map((row, i) => `${xOf(i)},${yOf(row[n])}`).join(" ");
-        return <g key={n}>
-          <polyline points={pts} fill="none" stroke={CHART_COLORS[ni]} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-          {history.map((row, i) => <circle key={i} cx={xOf(i)} cy={yOf(row[n])} r="3" fill="white" stroke={CHART_COLORS[ni]} strokeWidth="1.5" />)}
-        </g>;
-      })}
-    </svg>
+
+      <div style={{ display: "flex", gap: 24, marginTop: 4 }}>
+        {[
+          { region: "East", location: "Spelman College, Atlanta GA",       color: "#2563eb" },
+          { region: "West", location: "San Diego State University, CA",    color: "#16a34a" },
+        ].map(n => (
+          <div key={n.region} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#9ca3af" }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: n.color }} />
+            <span style={{ color: n.color, fontWeight: 500 }}>{n.region}</span>
+            <span>{n.location}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
@@ -113,14 +227,14 @@ function OffsetChart({ history }) {
 // ─────────────────────────────────────────────
 function DashboardPage() {
   const [nodes, setNodes] = useState(DUMMY_NTP);
-  const [offsetHistory, setOffsetHistory] = useState(OFFSET_HISTORY);
+  const [offsetHistory, setOffsetHistory] = useState({});
   const [systemStatus, setSystemStatus] = useState([
     { label: "PTP Grandmaster", val: "Online"  },
     { label: "Chrony",          val: "Running" },
-    { label: "GNSS MAX-M10S",    val: "Locked"  },
-    { label: "USB-ETH Dongle",   val: "Active"  },
-    { label: "PPS Signal",       val: "1 Hz"    },
-    { label: "Collector",        val: "Polling" },
+    { label: "GNSS MAX-M10S",   val: "Locked"  },
+    { label: "USB-ETH Dongle",  val: "Active"  },
+    { label: "PPS Signal",      val: "1 Hz"    },
+    { label: "Collector",       val: "Polling" },
   ]);
 
   const [selected, setSelected] = useState(null);
@@ -137,7 +251,6 @@ function DashboardPage() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        // 1) nodeMetrics[] (backend) -> nodes[] (frontend expects)
         const mappedNodes = (data.nodeMetrics || []).map((n) => ({
           target: n.target,
           timestamp: new Date(data.metadata?.updatedAt || Date.now()).toISOString(),
@@ -146,37 +259,25 @@ function DashboardPage() {
           timeouts: (n.total ?? 0) - (n.ok ?? 0),
           loss_pct: n.lossPct ?? 100.0,
           offset_ms_mean: n.offsetMs ?? null,
-          offset_ms_jitter: n.jitterMs ?? null,   // using jitterMs as shown in table
+          offset_ms_jitter: n.jitterMs ?? null,
           delay_ms_mean: n.delayMs ?? null,
-          delay_ms_jitter: null,                  // optional, you can add later
+          delay_ms_jitter: null,
         }));
 
-        // 2) offsetHistory.series[] -> OFFSET_HISTORY format your chart expects:
-        //    [{ t:"23:20", "node-01.lan": 0.38, ... }, ...]
         const series = data.offsetHistory?.series || [];
-        const nodeNames = series.map(s => s.node);
 
-        // Collect all timestamps that appear across nodes
-        const tsSet = new Set();
+        const perNodeSeries = {};
         for (const s of series) {
-          for (const p of (s.points || [])) tsSet.add(p.t);
+          const pts = (s.points || [])
+            .filter(p => p.t >= (Date.now() - 300 * 1000) && p.y !== null)
+            .slice(-10)
+            .map(p => ({
+              t: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+              y: p.y
+            }));
+          if (pts.length > 0) perNodeSeries[s.node] = pts;
         }
-        const timestamps = Array.from(tsSet).sort((a, b) => a - b);
 
-        const mappedHistory = timestamps.map((ts) => {
-          const row = {
-            t: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          };
-          for (const n of nodeNames) row[n] = null;
-
-          for (const s of series) {
-            const pt = (s.points || []).find(x => x.t === ts);
-            if (pt && pt.y !== undefined && pt.y !== null) row[s.node] = pt.y;
-          }
-          return row;
-        }).slice(-20); // keep last N points so the chart stays readable
-
-        // 3) systemStatus[] -> the right panel list
         const mappedStatus = (data.systemStatus || []).map((x) => ({
           label: x.name,
           val: x.state
@@ -184,9 +285,10 @@ function DashboardPage() {
 
         if (!alive) return;
         setNodes(mappedNodes);
-        if (mappedHistory.length) setOffsetHistory(mappedHistory);
+        if (Object.keys(perNodeSeries).length) setOffsetHistory(perNodeSeries);
         if (mappedStatus.length) setSystemStatus(mappedStatus);
         setLoading(false);
+
       } catch (e) {
         if (!alive) return;
         setErr(e.message || "Failed to load dashboard");
@@ -195,7 +297,7 @@ function DashboardPage() {
     }
 
     load();
-    const id = setInterval(load, 2000); // poll every 2s (tune as you like)
+    const id = setInterval(load, 2000);
     return () => { alive = false; clearInterval(id); };
   }, []);
 
@@ -206,8 +308,17 @@ function DashboardPage() {
     unreachable: nodes.filter(n => statusOf(n) === "Unreachable").length,
   };
 
+  const eastNode = nodes.find(n => n.target === "time-monitor-east");
+  const westNode = nodes.find(n => n.target === "time-monitor-west");
+
+  // Convert nodes to aggregator shape for geo section
+  const eastAgg = eastNode ? { target: eastNode.target, delayMs: eastNode.delay_ms_mean, jitterMs: eastNode.offset_ms_jitter, offsetMs: eastNode.offset_ms_mean } : null;
+  const westAgg = westNode ? { target: westNode.target, delayMs: westNode.delay_ms_mean, jitterMs: westNode.offset_ms_jitter, offsetMs: westNode.offset_ms_mean } : null;
+
   return (
     <div style={{ animation: "fadeIn 0.25s ease" }}>
+      {err && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 13 }}>{err}</div>}
+
       {/* Summary cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 22 }}>
         {[
@@ -224,46 +335,25 @@ function DashboardPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: 16, marginBottom: 20 }}>
-        {/* Chart */}
+        {/* Chart with metric selector */}
         <Card style={{ padding: "20px 22px" }}>
           <SectionTitle>Clock Offset History (ms)</SectionTitle>
-          <OffsetChart history={offsetHistory} />
-          <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
-            {Object.keys(offsetHistory[0] || { t: "" }).filter(k => k !== "t").map((n, i) => (
-              <div key={n} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#6b7280" }}>
-                <div style={{ width: 12, height: 2, background: CHART_COLORS[i], borderRadius: 1 }} />{n}
-              </div>
-            ))}
-          </div>
+          <MetricChart history={offsetHistory} />
         </Card>
 
         {/* System status */}
         <Card style={{ padding: "20px 22px" }}>
           {systemStatus.map((item) => (
-            <div
-              key={item.label}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "9px 0",
-                borderBottom: "1px solid #f3f4f6",
-              }}
-            >
-              <span style={{ fontSize: 12, color: "#374151" }}>
-                {item.label}
-              </span>
-
-              <span style={{ fontSize: 11, color: "#15803d", fontWeight: 500 }}>
-                {item.val}
-              </span>
+            <div key={item.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #f3f4f6" }}>
+              <span style={{ fontSize: 12, color: "#374151" }}>{item.label}</span>
+              <span style={{ fontSize: 11, color: "#15803d", fontWeight: 500 }}>{item.val}</span>
             </div>
           ))}
         </Card>
       </div>
 
       {/* Node table */}
-      <Card>
+      <Card style={{ marginBottom: 20 }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #f3f4f6" }}>
           <SectionTitle>Node Metrics</SectionTitle>
         </div>
@@ -271,7 +361,7 @@ function DashboardPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#f9fafb" }}>
-                {["Target", "Status", "Offset (ms)", "Jitter (ms)", "Delay (ms)", "Loss %", "OK / Total"].map(h => (
+                {["Target", "Location", "Status", "Offset (ms)", "Jitter (ms)", "Delay (ms)", "Loss %", "OK / Total"].map(h => (
                   <th key={h} style={{ padding: "10px 22px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#6b7280", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -280,11 +370,13 @@ function DashboardPage() {
               {nodes.map(node => {
                 const st = statusOf(node);
                 const isSelected = selected === node.target;
+                const location = NODE_LOCATIONS[node.target] || "—";
                 return (
                   <>
                     <tr key={node.target} onClick={() => setSelected(isSelected ? null : node.target)}
                       style={{ borderTop: "1px solid #f3f4f6", cursor: "pointer", background: isSelected ? "#f8faff" : "white" }}>
                       <td style={{ padding: "12px 22px", fontWeight: 500, color: "#111827", fontFamily: "'DM Mono',monospace", fontSize: 12 }}>{node.target}</td>
+                      <td style={{ padding: "12px 22px", fontSize: 12, color: "#6b7280" }}>{location}</td>
                       <td style={{ padding: "12px 22px" }}><Badge label={st} /></td>
                       <td style={{ padding: "12px 22px", color: node.offset_ms_mean !== null ? (Math.abs(node.offset_ms_mean) > 1 ? "#c2410c" : "#111827") : "#9ca3af", fontFamily: "'DM Mono',monospace" }}>{fmt(node.offset_ms_mean)}</td>
                       <td style={{ padding: "12px 22px", fontFamily: "'DM Mono',monospace", color: "#374151" }}>{fmt(node.offset_ms_jitter)}</td>
@@ -294,9 +386,14 @@ function DashboardPage() {
                     </tr>
                     {isSelected && (
                       <tr key={node.target + "-exp"} style={{ background: "#f8faff", borderTop: "1px solid #e0eaff" }}>
-                        <td colSpan={7} style={{ padding: "12px 22px 16px" }}>
+                        <td colSpan={8} style={{ padding: "12px 22px 16px" }}>
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16 }}>
-                            {[["Timestamp", new Date(node.timestamp).toLocaleString()], ["Timeouts", node.timeouts], ["Delay Jitter", fmt(node.delay_ms_jitter, " ms")], ["Offset Jitter", fmt(node.offset_ms_jitter, " ms")]].map(([l, v]) => (
+                            {[
+                              ["Timestamp",    new Date(node.timestamp).toLocaleString()],
+                              ["Timeouts",     node.timeouts],
+                              ["Delay Jitter", fmt(node.delay_ms_jitter, " ms")],
+                              ["Offset Jitter",fmt(node.offset_ms_jitter, " ms")],
+                            ].map(([l, v]) => (
                               <div key={l}>
                                 <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3 }}>{l}</div>
                                 <div style={{ fontSize: 12, color: "#374151", fontFamily: "'DM Mono',monospace" }}>{v}</div>
@@ -313,6 +410,10 @@ function DashboardPage() {
           </table>
         </div>
       </Card>
+
+      {/* Geographic comparison */}
+      <GeoComparisonSection eastNode={eastAgg} westNode={westAgg} />
+
     </div>
   );
 }
@@ -353,13 +454,10 @@ function ReservationPage() {
   return (
     <div style={{ animation: "fadeIn 0.25s ease" }}>
       <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 20, marginBottom: 22 }}>
-
-        {/* Form */}
         <Card style={{ padding: "22px 24px" }}>
           <SectionTitle>New Reservation</SectionTitle>
           {error   && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 7, padding: "9px 13px", fontSize: 12, marginBottom: 14 }}>{error}</div>}
           {success && <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#15803d", borderRadius: 7, padding: "9px 13px", fontSize: 12, marginBottom: 14 }}>{success}</div>}
-
           {[
             { label: "Email address", key: "email", type: "email",          placeholder: "you@institution.edu" },
             { label: "Start time",    key: "start", type: "datetime-local", placeholder: "" },
@@ -371,21 +469,18 @@ function ReservationPage() {
                 onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} style={inputStyle} />
             </div>
           ))}
-
           <div style={{ marginBottom: 18 }}>
             <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#374151", marginBottom: 5 }}>Cluster</label>
             <select value={form.cluster} onChange={e => setForm(p => ({ ...p, cluster: e.target.value }))} style={inputStyle}>
               {CLUSTERS.map(c => <option key={c.id} value={c.id}>{c.name} — {c.cores} cores / {c.ram}</option>)}
             </select>
           </div>
-
           <button onClick={handleSubmit}
             style={{ width: "100%", background: "#1d4ed8", color: "white", border: "none", borderRadius: 7, padding: "10px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
             Reserve Cluster
           </button>
         </Card>
 
-        {/* Availability */}
         <Card style={{ padding: "22px 24px" }}>
           <SectionTitle>Cluster Availability</SectionTitle>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -402,7 +497,6 @@ function ReservationPage() {
         </Card>
       </div>
 
-      {/* Reservations table */}
       <Card>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #f3f4f6" }}>
           <SectionTitle>All Reservations</SectionTitle>
@@ -490,13 +584,13 @@ export default function App() {
       </div>
 
       {/* PAGE */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "28px 24px" }}>
+      <div style={{ maxWidth: 1400, margin: "0 auto", padding: "28px 24px" }}>
         {page === "dashboard"   && <DashboardPage />}
         {page === "reservation" && <ReservationPage />}
       </div>
 
       <div style={{ textAlign: "center", padding: "16px", fontSize: 11, color: "#d1d5db" }}>
-        Time Sync Platform · Demo data · Connect API to go live
+        Time Sync Platform · NRP Nautilus · Live Data
       </div>
     </div>
   );

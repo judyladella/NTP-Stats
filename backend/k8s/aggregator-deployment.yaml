@@ -20,7 +20,7 @@ spec:
             - containerPort: 8001
           env:
             - name: DEVICE_ENDPOINTS
-              value: "http://ntp-collector-0.collector-headless:8000/metrics,http://ntp-collector-1.collector-headless:8000/metrics,http://ntp-collector-2.collector-headless:8000/metrics"
+              value: "http://ntp-collector-0.collector-headless:8000/metrics,http://ntp-collector-1.collector-headless:8000/metrics,http://ntp-collector-2.collector-headless:8000/metrics,http://time-monitor-east:8000/metrics,http://time-monitor-west:8000/metrics"
             - name: POLL_TIMEOUT_SEC
               value: "1.5"
             - name: SYNC_OFFSET_MS

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  time-server:
+    build: .
+    container_name: time-server
+    command: python3 server.py
+    networks:
+      - ntp-net
+
+  time-monitor:
+    build: .
+    environment:
+      - TARGET_IP=time-server
+      - TARGETS=time.nist.gov,pool.ntp.org
+    volumes:
+      - db-data:/app
+    command: python3 monitor.py
+    ports:
+      - "8000:8000"
+    depends_on:
+      - time-server
+    networks:
+      - ntp-net
+
+volumes:
+  db-data:
+
+networks:
+  ntp-net:
+    driver: bridge
