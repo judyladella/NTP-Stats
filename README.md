@@ -2,103 +2,184 @@
 
 ## Overview
 
-This project implements a system for measuring and visualizing clock synchronization performance across multiple devices using Network Time Protocol (NTP).
+This project implements a distributed system for measuring and visualizing clock synchronization performance across geographically distributed nodes using Network Time Protocol (NTP). It is deployed on the [Nautilus NRP](https://nautilus.optiputer.net/) research cluster (namespace: `cmpm118`).
 
-The system collects metrics from multiple nodes and clusters them into an API that feeds a real-time monitoring dashboard. The goal is to evaluate synchronization quality in our research environment involving Raspberry Pi clusters.
+The system collects metrics from multiple nodes across the United States, aggregates them into a unified API, and feeds a real-time monitoring dashboard. The goal is to evaluate how geographic distance affects NTP synchronization quality — measuring offset, jitter, delay, and packet loss from both East and West Coast vantage points.
 
 ## Research Motivation
 
-This project aims to:
+Network time synchronization is critical for distributed systems. This project investigates:
 
-1. Collect synchronization statistics from multiple devices
-2. Aggregate these metrics in real time
-3. Visualize synchronization behavior over time
+1. How geographic distance affects NTP latency and jitter
+2. How different NTP servers (Cloudflare, Google, NIST, pool.ntp.org) perform from different US regions
+3. How clock offset varies across nodes on the Nautilus research network
+
+Key finding: West Coast nodes show approximately 10ms lower delay than East Coast nodes when reaching the same NTP servers, consistent with the physical location of our internal time server at San Diego State University.
 
 ## System Architecture
 
-### 1. Backend: Aggregation and Monitoring API
+The system has three layers deployed on Nautilus NRP:
 
-Built with:
+```
+Browser / Frontend
+       │
+       ▼
+Aggregator API (port 8001)
+       │
+       ├── ntp-collector-0       ← Georgia Tech, Atlanta GA
+       ├── ntp-collector-1       ← San Diego State University, CA
+       ├── ntp-collector-2       ← SDSC, San Diego CA
+       ├── time-monitor-east     ← Spelman College, Atlanta GA
+       └── time-monitor-west     ← San Diego State University, CA
+```
 
-- `FastAPI`
-- `Uvicorn`
-- `HTTPX`
-- `asyncio`
-- `Python 3`
+### 1. Aggregator — `backend/aggregator/`
 
-Backend responsibilities:
+Built with FastAPI, Uvicorn, HTTPX, asyncio, and Python 3.
 
-- Poll collector nodes asynchronously
-- Aggregate synchronization metrics across devices
-- Provide a unified dataset for visualization through REST endpoints
+Responsibilities:
+- Poll all collector and monitor nodes asynchronously on every request
+- Aggregate synchronization metrics across all 5 nodes
+- Provide a unified REST endpoint for the frontend at `/api/ntp/dashboard`
 
-The backend collects and aggregates the following metrics:
+Metrics collected: clock offset, network jitter, round-trip delay, packet loss.
 
-- clock offset
-- network jitter
-- round-trip delay
-- packet loss
+### 2. Collector Nodes — `backend/collector/`
 
-Collectors are queried concurrently using `httpx.AsyncClient` to allow the system to scale efficiently across many nodes.
+Built with Python, ntplib, FastAPI, and statistics.
 
-### 2. Collector Nodes — NTP Measurement Service
+Three StatefulSet replicas deployed across Nautilus nodes, each probing `pool.ntp.org` once per second and exposing results at `/metrics`.
 
-Built with:
+### 3. Geographic Monitor Nodes — `monitor/`
 
-- `Python`
-- `socket`
-- `statistics`
-- `FastAPI`
+Built with Python, ntplib, socket, and threading.
 
-Collector responsibilities:
+Two Deployment pods pinned to specific geographic regions via Kubernetes `nodeAffinity`:
 
-- Send NTP requests to a reference time server
-- Measure network timing characteristics
-- Compute synchronization metrics
-- Expose results through a `/metrics` API endpoint
+- **time-monitor-east** — pinned to `us-east` nodes, currently running at Spelman College, Atlanta GA
+- **time-monitor-west** — pinned to `us-west` nodes, currently running at San Diego State University, CA
 
-Each collector acts as an independent monitoring node.
+Each monitor probes four NTP targets every 10 seconds:
+- `time.cloudflare.com` — Cloudflare Anycast NTP
+- `time.google.com` — Google NTP
+- `time.nist.gov` — NIST Time Server
+- `pool.ntp.org` — NTP Pool
 
-This architecture allows the system to be deployed across:
+Metrics are stored in a local SQLite database and served via a `/metrics` endpoint compatible with the aggregator's collector format, and a `/metrics/by-target` endpoint for per-server breakdown.
 
-- Raspberry Pi clusters
-- distributed servers
-- Docker containers
+### 4. Frontend Dashboard — `frontend/`
 
-### 3. Frontend — Real-Time Monitoring Dashboard
+Built with React and Vite.
 
-Built with:
+Features:
+- Live clock offset history chart, updating every 2 seconds
+- Node metrics table with location, status, offset, jitter, delay, and packet loss per node
+- Geographic latency comparison showing East vs West delay and jitter side by side
+- System status panel
+- All 5 nodes visible: 3 collectors and 2 geographic monitors
 
-- `React`
-- `Vite`
-- `Recharts`
+## Deployment on Nautilus NRP
 
-Frontend responsibilities:
+### Prerequisites
+- `kubectl` configured with access to the `cmpm118` namespace
+- Docker Hub access to push images
 
-- Display synchronization metrics in real time
-- Provide an overview of clock synchronization performance
-- Displays system health classifications (Synced / Degraded / Unreachable)
-
-The dashboard queries the collects the API periodically and updates the interface with the latest metrics.
-
-## Running the Project
-### 1. Start the Backend (Docker)
-
-Open a terminal in the the backend directory
-
-From the root directory of the repository, run:
+### Deploy the monitor pods
 
 ```bash
+cd monitor
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t paulleeisme06/ntp-monitor:v7 --push .
+kubectl apply -f k8s/nautilus-monitor.yaml -n cmpm118
+```
+
+### Deploy the aggregator and collectors
+
+```bash
+cd backend
+kubectl apply -f k8s/aggregator-deployment.yaml -n cmpm118
+kubectl apply -f k8s/aggregator-service.yaml -n cmpm118
+kubectl apply -f k8s/collector-statefulset.yaml -n cmpm118
+kubectl apply -f k8s/collector-service.yaml -n cmpm118
+```
+
+### Verify all pods are running
+
+```bash
+kubectl get pods -n cmpm118
+```
+
+Expected: 7 pods running — 1 aggregator, 3 collectors, 1 ntp-server, 1 time-monitor-east, 1 time-monitor-west.
+
+## Running Locally
+
+### Connect Frontend to Live Cluster
+
+In one terminal, start the port-forward to the live Nautilus cluster:
+
+```bash
+kubectl port-forward -n cmpm118 svc/aggregator-service 8001:8001
+```
+
+In a second terminal, start the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` in your browser. Keep the port-forward terminal open — closing it will disconnect the frontend from the live cluster.
+
+### Run the Full Stack Locally with Docker
+
+```bash
+cd backend
 docker compose up --build
 
-```
-### 2. Start the Frontend
+cd monitor
+docker compose up --build
 
-Open a new terminal in the the frontend directory
-
-From the root directory of the repository, run:
-
-```bash
+# Frontend
+cd frontend
+npm install
 npm run dev
+```
+
+## Project Structure
 
 ```
+NTP-Stats/
+├── backend/                      # Aggregator and collector nodes
+│   ├── aggregator/
+│   │   ├── aggregator_api.py
+│   │   └── Dockerfile
+│   ├── collector/
+│   │   ├── collector_service.py
+│   │   ├── collect_ntp_latency.py
+│   │   └── Dockerfile
+│   ├── k8s/
+│   │   ├── aggregator-deployment.yaml
+│   │   ├── aggregator-service.yaml
+│   │   ├── collector-statefulset.yaml
+│   │   └── collector-service.yaml
+│   └── docker-compose.yml
+├── monitor/                      # East/West geographic monitors
+│   ├── monitor.py
+│   ├── server.py
+│   ├── collector_api.py
+│   ├── Dockerfile
+│   ├── docker-compose.yaml
+│   ├── README.md
+│   └── k8s/
+│       └── nautilus-monitor.yaml
+└── frontend/                     # React monitoring dashboard
+    ├── src/
+    │   ├── App.jsx
+    │   └── main.jsx
+    └── package.json
+```
+
+---
+
+&copy; 2026 Paul (Fan Sheng) Lee, Judyanna Ladella, Prithika Venkatesh. All rights reserved.
